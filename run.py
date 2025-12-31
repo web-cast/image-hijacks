@@ -3,6 +3,84 @@ import importlib.util
 import shutil
 import sys
 import time
+# Patch for transformers compatibility
+import transformers.models.bloom.modeling_bloom
+import transformers.models.opt.modeling_opt
+import torch
+from typing import Optional
+
+def _make_causal_mask_bloom(
+    input_ids_shape: torch.Size, device: torch.device, past_key_values_length: int
+) -> torch.BoolTensor:
+    """
+    Make causal mask used for bi-directional self-attention.
+    """
+    batch_size, target_length = input_ids_shape
+    mask = torch.empty((target_length, target_length + past_key_values_length), dtype=torch.bool, device=device)
+    seq_ids = torch.arange(target_length, device=device)
+    mask[:, past_key_values_length:] = seq_ids[:, None] < seq_ids[None, :]
+
+    if past_key_values_length > 0:
+        mask[:, :past_key_values_length] = False
+
+    return mask[None, None, :, :].expand(batch_size, 1, target_length, target_length + past_key_values_length)
+
+def _make_causal_mask_opt(
+    input_ids_shape: torch.Size, dtype: torch.dtype, past_key_values_length: int = 0
+):
+    """
+    Make causal mask used for bi-directional self-attention.
+    """
+    batch_size, target_length = input_ids_shape
+    
+    mask_bool = torch.zeros((target_length, target_length + past_key_values_length), dtype=torch.bool)
+    seq_ids = torch.arange(target_length)
+    mask_bool[:, past_key_values_length:] = seq_ids[:, None] < seq_ids[None, :]
+    
+    if past_key_values_length > 0:
+        mask_bool[:, :past_key_values_length] = False
+        
+    return mask_bool[None, None, :, :].expand(batch_size, 1, target_length, target_length + past_key_values_length).to(dtype) * torch.finfo(dtype).min
+
+def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+    """
+    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
+    """
+    bsz, src_len = mask.size()
+    tgt_len = tgt_len if tgt_len is not None else src_len
+
+    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+
+    inverted_mask = 1.0 - expanded_mask
+
+    return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
+
+if not hasattr(transformers.models.bloom.modeling_bloom, "_make_causal_mask"):
+    transformers.models.bloom.modeling_bloom._make_causal_mask = _make_causal_mask_bloom
+
+if not hasattr(transformers.models.bloom.modeling_bloom, "_expand_mask"):
+    transformers.models.bloom.modeling_bloom._expand_mask = _expand_mask
+
+if not hasattr(transformers.models.opt.modeling_opt, "_make_causal_mask"):
+    transformers.models.opt.modeling_opt._make_causal_mask = _make_causal_mask_opt
+
+if not hasattr(transformers.models.opt.modeling_opt, "_expand_mask"):
+    transformers.models.opt.modeling_opt._expand_mask = _expand_mask
+
+# Patch MllamaConfig to have vocab_size
+try:
+    from transformers import MllamaConfig
+    if not hasattr(MllamaConfig, "vocab_size"):
+        @property
+        def vocab_size(self):
+            if hasattr(self, "text_config"):
+                return self.text_config.vocab_size
+            return 128256 # Fallback
+        
+        MllamaConfig.vocab_size = vocab_size
+except ImportError:
+    pass
+
 from image_hijacks.config import Config
 import pathspec
 
@@ -214,9 +292,9 @@ def train(
         )
 
     trainer = pl.Trainer(
-        accelerator="auto",
-        # accelerator="cpu",
-        devices=1,
+        accelerator="gpu",
+        devices=1,  # 显式单卡
+        strategy="auto",  # DDP might be causing issues with single device or memory overhead
         max_epochs=config.epochs,
         log_every_n_steps=1,
         callbacks=callbacks,

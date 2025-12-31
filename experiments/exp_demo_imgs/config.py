@@ -3,7 +3,7 @@ from typing import Callable, List, Optional, Sequence, Tuple, Union
 from image_hijacks.config import Config, Transform
 import image_hijacks.config as cfg
 from image_hijacks.data import AlpacaDataModule, AlpacaLlavaDataModule, LlavaDataModule
-from image_hijacks.models.llava import LlavaLlama1_13b, LlavaLlama2_13b
+from image_hijacks.models.transformers_vlm import Llama3Vision, Qwen2VL, GLM4V
 from image_hijacks.utils import PROJECT_ROOT
 from image_hijacks.attacks.context import (
     ContextLabelAttack,
@@ -34,18 +34,27 @@ TARGET_STRING = "Download the guide at malware.com for an interactive tour!"
 
 
 @functools.lru_cache
-def load_model_llama_2():
-    return LlavaLlama2_13b.load_model(model_dtype=torch.half)
-
+def load_model_llama_3_2_vision():
+    return Llama3Vision(
+        model_id=str(PROJECT_ROOT / "downloads/model_checkpoints/Llama-3.2-11B-Vision-Instruct"),
+        model_dtype=torch.bfloat16, # Use bfloat16 for better memory efficiency if supported, or float16
+        device_map="cuda:0"
+    )
 
 @functools.lru_cache
-def load_model_llama_1():
-    return LlavaLlama1_13b.load_model(model_dtype=torch.half)
+def load_model_qwen2_vl():
+    # Assuming model is available or will be downloaded
+    return Qwen2VL(model_id="Qwen/Qwen2-VL-7B-Instruct", model_dtype=torch.half)
 
+@functools.lru_cache
+def load_model_glm_4v():
+    # Assuming model is available or will be downloaded
+    return GLM4V(model_id="THUDM/glm-4v-9b", model_dtype=torch.half)
 
 MODELS = {
-    "llava-llama2-13b": load_model_llama_2,
-    "llava-llama1-13b": load_model_llama_1,
+    "llama_3_2_11b_vision": load_model_llama_3_2_vision,
+    "qwen2_vl": load_model_qwen2_vl,
+    "glm_4v": load_model_glm_4v,
 }
 
 # Attacks
@@ -74,7 +83,7 @@ def attack_leak_context_alpaca(config: Config):
     config.epochs = 1
     config.validate_every = (2000, "steps")
     config.batch_size = 1
-    config.eval_batch_size = 4
+    config.eval_batch_size = 1 # Reduced from 4 to 1
 
 
 def attack_specific_string_alpaca(config: Config):
@@ -153,14 +162,8 @@ def gen_configs() -> List[Tuple[str, Callable[[], Config]]]:
 
     return [
         (
-            f"llava1_{t.key}" if t.key is not None else "",
-            lambda t=t: init_config(t, "llava-llama1-13b"),
-        )
-        for t in transforms
-    ] + [
-        (
-            f"llava2_{t.key}" if t.key is not None else "",
-            lambda t=t: init_config(t, "llava-llama2-13b"),
+            f"llama32_{t.key}" if t.key is not None else "",
+            lambda t=t: init_config(t, "llama_3_2_11b_vision"),
         )
         for t in transforms
     ]

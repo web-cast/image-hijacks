@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Literal, Optional, Tuple, List, TypeVar, Type
+from typing import Literal, Optional, Tuple, List, TypeVar, Type, Any
 import torch
 from PIL import Image
 
@@ -34,14 +34,14 @@ class AbstractLensModel(ABC, nn.Module):
     @abstractmethod
     def preprocess_image(
         self, img: Union[Image.Image, List[Image.Image]]
-    ) -> Tuple[Float[Tensor, "b c h w"], Bool[Tensor, "b img_seq_len"]]:
-        """Converts PIL image to unnormalised tensor with pixel values in [0, 1]"""
+    ) -> Any:
+        """Converts PIL image to model inputs (tensor or dict)"""
         ...
 
     @abstractmethod
     def normalize_image(
-        self, pixel_values: Float[Tensor, "b c h w"]
-    ) -> Float[Tensor, "b c h w"]:
+        self, image_inputs: Any
+    ) -> Any:
         """Normalise batch of images"""
         ...
 
@@ -78,7 +78,7 @@ class AbstractLensModel(ABC, nn.Module):
     @abstractmethod
     def get_image_embeddings(
         self,
-        pixel_values: Float[Tensor, "b c h w"],
+        image_inputs: Any,
         tokens: Optional[Float[Tensor, "b tok_seq_len h_lm"]] = None,
         token_attention_mask: Optional[Bool[Tensor, "b tok_seq_len"]] = None,
     ) -> Float[Tensor, "b img_seq_len h_lm"]:
@@ -94,7 +94,7 @@ class AbstractLensModel(ABC, nn.Module):
     @abstractmethod
     def get_embeddings_from_image_and_tokens(
         self,
-        pixel_values: Float[Tensor, "b c h w"],
+        image_inputs: Any,
         tokens: Float[Tensor, "b tok_seq_len h_lm"],
         image_attention_mask: Optional[Bool[Tensor, "b img_seq_len"]] = None,
         token_attention_mask: Optional[Bool[Tensor, "b tok_seq_len"]] = None,
@@ -110,6 +110,7 @@ class AbstractLensModel(ABC, nn.Module):
         attention_mask: Optional[Bool[Tensor, "b src_seq_len"]] = None,
         decoder_input_ids: Optional[Int64[Tensor, "b tgt_seq_len"]] = None,
         decoder_attention_mask: Optional[Bool[Tensor, "b tgt_seq_len"]] = None,
+        image_inputs: Any = None,
     ) -> Float[Tensor, "b seq_len n_tokens"]:
         """Given input embeddings (and optionally decoder input IDs), return per-position logits.
         - If decoder input IDs not provided, [BOS] passed to decoder.
@@ -123,7 +124,7 @@ class AbstractLensModel(ABC, nn.Module):
 
     def get_logits_end_to_end(
         self,
-        pixel_values: Float[Tensor, "b c h w"],
+        image_inputs: Any,
         tokens: Int64[Tensor, "b src_seq_len h_lm"],
         image_attention_mask: Optional[Bool[Tensor, "b img_seq_len"]] = None,
         token_attention_mask: Optional[Bool[Tensor, "b src_seq_len"]] = None,
@@ -139,20 +140,21 @@ class AbstractLensModel(ABC, nn.Module):
         return logits:     T0 T1 T2 T3
         """
         embs, attn_mask = self.get_embeddings_from_image_and_tokens(
-            pixel_values, tokens, image_attention_mask, token_attention_mask
+            image_inputs, tokens, image_attention_mask, token_attention_mask
         )
         return self.get_logits_from_embeddings(
             embs,
             attention_mask=attn_mask,
             decoder_input_ids=decoder_input_ids,
             decoder_attention_mask=decoder_attention_mask,
+            image_inputs=image_inputs,
         )
 
     # === Generation ===
     @abstractmethod
     def generate_end_to_end(
         self,
-        pixel_values: Float[Tensor, "b c h w"],
+        image_inputs: Any,
         tokens: Float[Tensor, "b tok_seq_len h_lm"],
         image_attention_mask: Optional[Bool[Tensor, "b img_seq_len"]] = None,
         token_attention_mask: Optional[Bool[Tensor, "b tok_seq_len"]] = None,
@@ -172,6 +174,7 @@ class AbstractLensModel(ABC, nn.Module):
         input_embeddings: Float[Tensor, "b src_seq_len h_lm"],
         attention_mask: Optional[Bool[Tensor, "b src_seq_len"]] = None,
         max_new_tokens: int = 20,
+        image_inputs: Any = None,
     ) -> Int64[Tensor, "b new_seq_len n_tokens"]:
         """Given input embeddings, return generated output tokens.
         - Attention mask 0 if token should be ignored (i.e. padding).
@@ -209,7 +212,6 @@ class AbstractLensModel(ABC, nn.Module):
     # === Loading model ===
 
     @classmethod
-    @abstractmethod
     def load_model(
         cls: Type[AbstractLensModelT],
         model_dtype: torch.dtype = torch.half,

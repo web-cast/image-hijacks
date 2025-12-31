@@ -70,6 +70,23 @@ from PIL.Image import Image
 
 T = TypeVar("T")
 
+def _debug_downsample(img, model):
+    if img.dim() == 3:
+        return F.interpolate(img.unsqueeze(0), size=model.input_image_dims(), antialias=True, mode="bilinear").squeeze(0)
+    elif img.dim() == 4:
+        return F.interpolate(img, size=model.input_image_dims(), antialias=True, mode="bilinear")
+    elif img.dim() == 5:
+        # Handle 5D input (N, C, D, H, W)
+        # Treat D as part of batch for interpolation
+        N, C, D, H, W = img.shape
+        # (N, C, D, H, W) -> (N, D, C, H, W) -> (N*D, C, H, W)
+        img_reshaped = img.permute(0, 2, 1, 3, 4).reshape(N*D, C, H, W)
+        out = F.interpolate(img_reshaped, size=model.input_image_dims(), antialias=True, mode="bilinear")
+        # (N*D, C, H_new, W_new) -> (N, D, C, H_new, W_new) -> (N, C, D, H_new, W_new)
+        out = out.view(N, D, C, *model.input_image_dims()).permute(0, 2, 1, 3, 4)
+        return out
+    return F.interpolate(img, size=model.input_image_dims(), antialias=True, mode="bilinear")
+
 # fmt: off
 @dataclass
 class Config:
@@ -85,7 +102,7 @@ class Config:
     downsample: Callable[
         [Float[Tensor, "b c h w"], AbstractLensModel], 
         Float[Tensor, "b c h_new w_new"]
-    ] = lambda img, model: F.interpolate(img, size=model.input_image_dims(), antialias=True, mode="bilinear")
+    ] = lambda img, model: _debug_downsample(img, model)
 
 # === Processor ===
     processor_factory: Type[Processor] = LearnedImageProcessor
@@ -302,11 +319,22 @@ def opt_adam(config: Config, clip_grad_mag: float = 20):
 # Parameters
 
 def set_input_image(config: Config, img: Image):
-    config.init_image = Factory(
-        lambda config: next(iter(config.target_models_train.values())).preprocess_image(
-            img
-        )[0]
-    )
+    def _init_image(config):
+        model = next(iter(config.target_models_train.values()))
+        inputs = model.preprocess_image(img)
+        
+        if isinstance(inputs, dict):
+            pixel_values = inputs["pixel_values"]
+            for m in config.target_models_train.values():
+                if hasattr(m, "set_static_image_info"):
+                    m.set_static_image_info(inputs)
+            return pixel_values[0]
+        elif isinstance(inputs, tuple):
+            return inputs[0][0]
+        else:
+            return inputs[0]
+
+    config.init_image = Factory(_init_image)
 
 def set_eps(config: Config, eps: float):
     config.image_update_eps = eps

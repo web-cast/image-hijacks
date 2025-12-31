@@ -122,7 +122,15 @@ def load_model_with_cache(
         model = torch.load(cache_path).eval()
     else:
         model = model_fn()
-        torch.save(model, cache_path)
+        # Device-mapped or sharded models (e.g., device_map="auto") often cannot be pickled.
+        # Skip caching on save failure to allow multi-GPU loading without crashing.
+        try:
+            #torch.save(model, cache_path)
+            #使用双卡时，拒绝保存模型
+            pass
+        except Exception as e:
+            #print(f"[warn] skip caching model due to save error: {type(e).__name__}: {e}")
+            pass
     return model
 
 

@@ -88,9 +88,14 @@ class ContextAttack(AttackDriver, ABC):
 
     def log_loss_and_accuracy(self, batch, prefix, dataset):
         total_loss = torch.tensor(0.0, device=self.init_image.device)
-        img = quantise_image(self.processor(self.init_image))
+        print(f"DEBUG: init_image shape: {self.init_image.shape}")
+        proc_out = self.processor(self.init_image)
+        print(f"DEBUG: processor output shape: {proc_out.shape}")
+        img = quantise_image(proc_out)
+        print(f"DEBUG: quantise_image output shape: {img.shape}")
         for k, model in self.eval_models.items():
             img_sml = self.config.downsample(img, model)
+            print(f"DEBUG: downsample output shape: {img_sml.shape}")
             input_ids, input_attn_mask, output_ids, output_attn_mask = batch[k]
             input_len = int((input_ids != 0).sum(dim=-1).max())
             output_len = int((output_ids != 0).sum(dim=-1).max())

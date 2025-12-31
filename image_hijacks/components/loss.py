@@ -50,8 +50,17 @@ class VLMCrossEntropyLoss(Loss):
         target_ids: Int64[Tensor, "b tgt_seq_len"],
         target_attn_masks: Bool[Tensor, "b tgt_seq_len"],
     ) -> Float[Tensor, ""]:
+        # Handle arbitrary pixel_values shape (1, ...)
+        # pixel_values might be 4D (1, C, H, W) or 5D/6D for some models (1, Num_Images, Max_Tiles, C, H, W)
+        b_size = input_ids.shape[0]
+        if pixel_values.shape[0] == 1:
+            # Expand batch dimension
+            pixel_values = pixel_values.expand(b_size, *pixel_values.shape[1:])
+        elif pixel_values.shape[0] != b_size:
+             raise ValueError(f"pixel_values batch size {pixel_values.shape[0]} does not match input_ids batch size {b_size}")
+
         logits = model.get_logits_end_to_end(
-            repeat(pixel_values, "() c h w -> b c h w", b=input_ids.shape[0]),
+            pixel_values,
             tokens=input_ids,
             token_attention_mask=input_attn_masks,
             decoder_input_ids=target_ids,
