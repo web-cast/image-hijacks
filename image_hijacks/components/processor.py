@@ -47,6 +47,39 @@ class Processor(nn.Module, ABC):
         tag: str = "adversarial_image",
         caption: str = "Adversarial image",
     ):
+        # Handle tiled images (B, T, C, H, W)
+        if image.ndim == 5:
+            from torchvision.utils import make_grid
+            from torchvision.transforms.functional import to_pil_image
+            
+            # image[0] is (T, C, H, W)
+            # Create a grid of tiles
+            grid = make_grid(image[0].cpu(), nrow=int(image.shape[1]**0.5))
+            
+            # Save image to TB
+            trainer.logger.experiment.add_image(  # type: ignore
+                caption,
+                grid,
+                dataformats="CHW",
+                global_step=trainer.step,
+            )
+            
+            # Save image to filesystem
+            img_dir = (
+                Path(trainer.trainer.logger.save_dir) / trainer.trainer.logger.version / "imgs"  # type: ignore
+            )
+            img_dir.mkdir(parents=True, exist_ok=True)
+            
+            img = to_pil_image(grid.float())
+            img.save(img_dir / f"{name}.png")
+            
+            # Save image to WandB
+            if len(trainer.loggers) > 1:
+                trainer.loggers[1].experiment.log(  # type: ignore
+                    {tag: wandb.Image(img, caption=caption)}
+                )
+            return
+
         # Save image to TB
         trainer.logger.experiment.add_image(  # type: ignore
             caption,

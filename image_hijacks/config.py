@@ -325,7 +325,12 @@ def set_input_image(config: Config, img: Image):
         
         if isinstance(inputs, dict):
             pixel_values = inputs["pixel_values"]
-            for m in config.target_models_train.values():
+            # Update both train and eval models
+            all_models = list(config.target_models_train.values()) + list(config.target_models_eval.values())
+            # Remove duplicates
+            all_models = list(set(all_models))
+            
+            for m in all_models:
                 if hasattr(m, "set_static_image_info"):
                     m.set_static_image_info(inputs)
             return pixel_values[0]

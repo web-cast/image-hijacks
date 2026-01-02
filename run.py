@@ -287,8 +287,15 @@ def train(
         wandb.Table.MAX_ARTIFACTS_ROWS = 10000000
         if backup_path is not None:
             wandb.save(str(backup_path))
+        # Create a safe copy of config without heavy model objects to avoid OOM during deepcopy
+        safe_config = dataclasses.replace(
+            config, 
+            target_models_train={}, 
+            target_models_eval={}, 
+            whitebox_model=None
+        )
         wandb_logger.experiment.config.update(
-            transform_dict(dataclasses.asdict(config))
+            transform_dict(dataclasses.asdict(safe_config))
         )
 
     trainer = pl.Trainer(

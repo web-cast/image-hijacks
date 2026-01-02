@@ -213,7 +213,12 @@ class TransformersVLM(AbstractLensModel):
              kwargs.update(image_inputs)
         elif isinstance(image_inputs, torch.Tensor):
              kwargs["pixel_values"] = image_inputs
+             if hasattr(self, "static_image_info") and self.static_image_info:
+                 kwargs.update(self.static_image_info)
              
+        if tokens.dtype in [torch.int64, torch.int32, torch.long]:
+            return self.model.generate(input_ids=tokens, attention_mask=token_attention_mask, max_new_tokens=max_new_tokens, **kwargs)
+        
         return self.model.generate(inputs_embeds=tokens, attention_mask=token_attention_mask, max_new_tokens=max_new_tokens, **kwargs)
 
     def generate_from_embeddings(
@@ -252,6 +257,32 @@ class TransformersVLM(AbstractLensModel):
         if image_inputs is not None and isinstance(image_inputs, dict):
              kwargs.update(image_inputs)
              
+        if decoder_input_ids is not None:
+            # Causal LM training with teacher forcing
+            decoder_embeddings = self.get_token_embeddings(decoder_input_ids)
+            full_embeddings = torch.cat([input_embeddings, decoder_embeddings], dim=1)
+            
+            if attention_mask is not None:
+                if decoder_attention_mask is None:
+                    decoder_attention_mask = torch.ones_like(decoder_input_ids, dtype=torch.bool, device=attention_mask.device)
+                full_attention_mask = torch.cat([attention_mask, decoder_attention_mask], dim=1)
+            else:
+                full_attention_mask = None
+                
+            outputs = self.model(
+                inputs_embeds=full_embeddings,
+                attention_mask=full_attention_mask,
+                **kwargs
+            )
+            # DEBUG PRINTS
+            print(f"DEBUG: input_embeddings shape: {input_embeddings.shape}")
+            print(f"DEBUG: decoder_input_ids shape: {decoder_input_ids.shape}")
+            print(f"DEBUG: full_embeddings shape: {full_embeddings.shape}")
+            print(f"DEBUG: outputs.logits shape: {outputs.logits.shape}")
+            
+            # Return logits corresponding to the decoder inputs
+            return outputs.logits[:, input_embeddings.shape[1]:, :]
+
         outputs = self.model(
             inputs_embeds=input_embeddings,
             attention_mask=attention_mask,
@@ -365,6 +396,31 @@ class Llama3Vision(TransformersVLM):
         if tokens.dtype in [torch.int64, torch.int32, torch.long]:
             tokens = self.get_token_embeddings(tokens)
         return tokens, token_attention_mask
+
+    def generate_end_to_end(
+        self,
+        image_inputs: Any,
+        tokens: Float[Tensor, "b tok_seq_len h_lm"],
+        image_attention_mask: Optional[Bool[Tensor, "b img_seq_len"]] = None,
+        token_attention_mask: Optional[Bool[Tensor, "b tok_seq_len"]] = None,
+        max_new_tokens: int = 20,
+    ) -> Int64[Tensor, "b tok_seq_len n_tokens"]:
+        
+        if isinstance(image_inputs, torch.Tensor):
+            # Mllama expects [B, Num_Images, Max_Tiles, C, H, W] (6 dims)
+            # Current shape might be [B, Tiles, C, H, W] (5 dims) or [B, C, H, W] (4 dims)
+            
+            if image_inputs.dim() == 4:
+                # [B, C, H, W] -> [B, 1, 1, C, H, W]
+                image_inputs = image_inputs.unsqueeze(1).unsqueeze(1)
+            elif image_inputs.dim() == 5:
+                # [B, T, C, H, W] -> [B, 1, T, C, H, W]
+                # We assume the 2nd dim is tiles for a single image
+                image_inputs = image_inputs.unsqueeze(1)
+        
+        return super().generate_end_to_end(
+            image_inputs, tokens, image_attention_mask, token_attention_mask, max_new_tokens
+        )
 
 class Qwen2VL(TransformersVLM):
     def preprocess_image(self, img):

@@ -130,7 +130,7 @@ class ContextAttack(AttackDriver, ABC):
                 + self.config.test_max_extra_gen_length,
             )
             generated_ids = model.generate_end_to_end(
-                pixel_values=img_sml,
+                image_inputs=img_sml,
                 tokens=input_ids,
                 token_attention_mask=input_attn_mask,
                 max_new_tokens=gen_len,
